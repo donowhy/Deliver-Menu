@@ -24,15 +24,19 @@ def fetch_menu_data():
         return None
 
 def format_menu_list(main_dish, side_dishes):
-    """메인 요리와 반찬을 개행 문자로 정렬합니다."""
-    sides = side_dishes.replace(",", "\n").replace(" ", "\n")
-    side_list = [s.strip() for s in sides.split("\n") if s.strip()]
-    return f"{main_dish}\n" + "\n".join(side_list)
+    """메인 요리와 반찬을 개행 문자로 정렬합니다. (팀즈 호환용 더블 개행)"""
+    # 콤마나 공백을 줄바꿈으로 변경
+    sides = side_dishes.replace(",", "\n\n").replace(" ", "\n\n")
+    # 중복 공백 제거 및 정리
+    side_list = [s.strip() for s in sides.split("\n\n") if s.strip()]
+    
+    # 팀즈 마크다운에서는 문장 끝에 공백 두 개를 넣거나 \n\n을 써야 줄바꿈이 확실합니다.
+    return f"{main_dish}\n\n" + "\n\n".join(side_list)
 
 def parse_menu(raw_data):
     """데이터를 읽어 팀즈 전송용 메시지로 변환합니다."""
     if not raw_data or "data" not in raw_data:
-        return "오늘의 식단 정보를 가져올 수 없습니다."
+        return "🍱 오늘의 식단 정보를 가져올 수 없습니다."
     
     today_str = datetime.now().strftime("%Y-%m-%d")
     results = {"lunch_salad": "정보 없음", "lunch_main": "정보 없음", "dinner": "정보 없음"}
@@ -46,16 +50,31 @@ def parse_menu(raw_data):
         elif "석식 일반메뉴" in meal_type:
             results["dinner"] = format_menu_list(main_dish, side_dishes)
     
-    msg = f"🍱 {today_str} 오늘의 식단표\n에스엘 식당 메뉴 안내\n\n"
-    msg += f"🥗 중식 (샐러드)\n{results['lunch_salad']}\n\n"
-    msg += f"🍱 중식 (일반)\n{results['lunch_main']}\n\n"
-    msg += f"🌙 석식 (일반)\n{results['dinner']}"
+    # 요청하신 세로 모드 양식 (줄바꿈 보강)
+    msg = f"🍱 {today_str} 오늘의 식단표\n\n"
+    msg += "에스엘 식당 메뉴 안내 (세로 모드)\n\n"
+    
+    msg += "🥗 **중식 (샐러드)**\n\n"
+    msg += f"{results['lunch_salad']}\n\n"
+    
+    msg += "🍱 **중식 (일반)**\n\n"
+    msg += f"{results['lunch_main']}\n\n"
+    msg += "🌙 **석식 (일반)**\n\n"
+    msg += f"{results['dinner']}"
+    
     return msg
 
 def send_message(url, message):
-    """실제 웹훅 URL로 메시지를 전송합니다."""
+    """Power Automate 흐름으로 메시지를 전송합니다."""
+    # Power Automate 흐름의 'HTTP 요청이 수신되었을 때' 트리거는 보통 JSON 형식을 기대합니다.
+    payload = {
+        "text": message
+    }
+    
     try:
-        res = requests.post(url, json={"text": message})
+        # 헤더 명시 (JSON 형식임을 흐름에 알림)
+        headers = {'Content-Type': 'application/json'}
+        res = requests.post(url, data=json.dumps(payload), headers=headers)
         return res.status_code
     except Exception as e:
         print(f"발송 실패: {e}")
