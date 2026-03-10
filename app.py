@@ -18,8 +18,6 @@ app.secret_key = os.getenv("SECRET_KEY", "your-super-secret-key-123")
 
 # --- [DB 설정] ---
 DATABASE_URL = os.getenv("DATABASE_URL")
-DATABASE_KEY = os.getenv("DATABASE_KEY")
-DATABASE_URL.replace("PASSWORD", DATABASE_KEY)
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -31,22 +29,25 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # --- [모델 정의] ---
+# pk, name, key, type(CHAT, CHANNEL)
 class Webhook(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    url = db.Column(db.String(500), nullable=False)
-    name = db.Column(db.String(100), nullable=True)
+    pk = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(100), nullable=False)
+    key = db.Column(db.String(500), nullable=False)  # Webhook URL
+    type = db.Column(db.String(20), nullable=False) # CHAT or CHANNEL
     created_at = db.Column(db.DateTime, default=datetime.now)
 
+# DB 초기화 및 테이블 생성
 with app.app_context():
     db.create_all()
 
 # --- [식단 관련 로직] ---
-OPER_CD = os.getenv("OPER_CD")
-ASSIGN_CD = os.getenv("ASSIGN_CD")
-SCHEDULE_TIME = os.getenv("SCHEDULE_TIME")
-menuWebUrl = os.getenv("MENU_WEB_URL")
+OPER_CD = os.getenv("OPER_CD", "O000002")
+ASSIGN_CD = os.getenv("ASSIGN_CD", "S000545")
+SCHEDULE_TIME = os.getenv("SCHEDULE_TIME", "07:50")
+
 def fetch_menu_data():
-    url = menuWebUrl
+    url = "https://puls2.pulmuone.com/src/sql/menu/week_sql.php"
     request_param = {"topOperCd": OPER_CD, "topAssignCd": ASSIGN_CD, "menuDay": 0}
     payload = {"requestId": "search_week", "requestMode": "1", "requestParam": json.dumps(request_param)}
     headers = {
@@ -98,8 +99,9 @@ def send_to_all_webhooks():
         message = parse_menu(raw)
         for wh in webhooks:
             try:
-                res = requests.post(wh.url, json={"text": message})
-                print(f"전송 성공: {wh.name} (상태: {res.status_code})")
+                # DB의 'key' 필드에 저장된 URL로 발송
+                res = requests.post(wh.key, json={"text": message})
+                print(f"전송 성공: [{wh.type}] {wh.name} (상태: {res.status_code})")
             except Exception as e:
                 print(f"전송 실패 {wh.name}: {e}")
 
@@ -111,18 +113,22 @@ def index():
 
 @app.route('/add', methods=['POST'])
 def add_webhook():
-    url = request.form.get('url')
     name = request.form.get('name')
-    if url:
-        new_wh = Webhook(url=url, name=name)
+    key = request.form.get('key')
+    type = request.form.get('type') # CHAT or CHANNEL
+    
+    if name and key and type:
+        new_wh = Webhook(name=name, key=key, type=type)
         db.session.add(new_wh)
         db.session.commit()
-        flash('웹훅이 등록되었습니다.')
+        flash(f'[{type}] {name} 웹훅이 등록되었습니다.')
+    else:
+        flash('모든 필드를 입력해주세요.')
     return redirect(url_for('index'))
 
-@app.route('/delete/<int:id>')
-def delete_webhook(id):
-    wh = Webhook.query.get(id)
+@app.route('/delete/<int:pk>')
+def delete_webhook(pk):
+    wh = Webhook.query.get(pk)
     if wh:
         db.session.delete(wh)
         db.session.commit()
@@ -144,13 +150,11 @@ def run_scheduler():
         time.sleep(60)
 
 if __name__ == '__main__':
-    # 터미널에서 python app.py --now 라고 실행하면 즉시 전송 후 종료
     if len(sys.argv) > 1 and sys.argv[1] == '--now':
         print("즉시 전송 모드를 시작합니다...")
         send_to_all_webhooks()
         sys.exit(0)
     
-    # 일반 실행 (서버 + 스케줄러)
     t = threading.Thread(target=run_scheduler)
     t.daemon = True
     t.start()
