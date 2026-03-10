@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: menu_db
+    restart: always
+    environment:
+      MYSQL_DATABASE: menu_deliver
+      MYSQL_ROOT_PASSWORD: my_menu_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+    # 타임존 설정 (DB 로그 확인용)
+    command:
+      - --default-time-zone=+09:00
+
+  web:
+    build: .
+    container_name: menu_app
+    restart: always
+    ports:
+      - "80:10000"
+    environment:
+      # db 서비스 이름을 호스트명으로 사용
+      - DATABASE_URL=mysql+pymysql://root:my_menu_password@db:3306/menu_deliver
+      - SECRET_KEY=super-secret-key-123
+      - SCHEDULE_TIME=07:50
+      - TZ=Asia/Seoul
+    depends_on:
+      - db
