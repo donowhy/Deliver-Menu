@@ -17,11 +17,21 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your-super-secret-key-123")
 
 # --- [DB 설정] ---
+# Render 설정에서 DATABASE_URL과 DATABASE_KEY(비밀번호)를 가져옵니다.
 DATABASE_URL = os.getenv("DATABASE_URL")
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+DATABASE_KEY = os.getenv("DATABASE_KEY")
 
-if not DATABASE_URL:
+if DATABASE_URL:
+    # 1. 비밀번호 치환 (URL 안에 [PASSWORD] 또는 PASSWORD 라는 문자열이 있다면 DATABASE_KEY로 교체)
+    if DATABASE_KEY:
+        DATABASE_URL = DATABASE_URL.replace("PASSWORD", DATABASE_KEY).replace("[PASSWORD]", DATABASE_KEY)
+    
+    # 2. SQLAlchemy 1.4+ 호환성을 위해 postgres://를 postgresql://로 변환
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+else:
+    # DATABASE_URL이 아예 없을 경우 로컬 DB 사용
+    print("경고: DATABASE_URL 환경 변수가 없습니다. 로컬 SQLite를 사용합니다.")
     DATABASE_URL = "sqlite:///webhooks.db"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
@@ -29,15 +39,13 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # --- [모델 정의] ---
-# pk, name, key, type(CHAT, CHANNEL)
 class Webhook(db.Model):
     pk = db.Column(db.Integer, primary_key=True, autoincrement=True)
     name = db.Column(db.String(100), nullable=False)
-    key = db.Column(db.String(500), nullable=False)  # Webhook URL
+    key = db.Column(db.String(500), nullable=False)
     type = db.Column(db.String(20), nullable=False) # CHAT or CHANNEL
     created_at = db.Column(db.DateTime, default=datetime.now)
 
-# DB 초기화 및 테이블 생성
 with app.app_context():
     db.create_all()
 
@@ -83,25 +91,21 @@ def parse_menu(raw_data):
     return msg
 
 def send_to_all_webhooks():
-    """모든 등록된 웹훅으로 메시지 전송"""
+    """DB에 등록된 모든 웹훅으로 전송"""
     with app.app_context():
         webhooks = Webhook.query.all()
         if not webhooks:
-            print("등록된 웹훅이 없습니다.")
+            print("전송할 웹훅이 DB에 없습니다.")
             return
         
-        print(f"[{datetime.now()}] 식단 데이터 조회 중...")
         raw = fetch_menu_data()
-        if not raw:
-            print("데이터 조회 실패")
-            return
+        if not raw: return
         
         message = parse_menu(raw)
         for wh in webhooks:
             try:
-                # DB의 'key' 필드에 저장된 URL로 발송
-                res = requests.post(wh.key, json={"text": message})
-                print(f"전송 성공: [{wh.type}] {wh.name} (상태: {res.status_code})")
+                requests.post(wh.key, json={"text": message})
+                print(f"전송 성공: [{wh.type}] {wh.name}")
             except Exception as e:
                 print(f"전송 실패 {wh.name}: {e}")
 
@@ -115,15 +119,12 @@ def index():
 def add_webhook():
     name = request.form.get('name')
     key = request.form.get('key')
-    type = request.form.get('type') # CHAT or CHANNEL
-    
+    type = request.form.get('type')
     if name and key and type:
         new_wh = Webhook(name=name, key=key, type=type)
         db.session.add(new_wh)
         db.session.commit()
-        flash(f'[{type}] {name} 웹훅이 등록되었습니다.')
-    else:
-        flash('모든 필드를 입력해주세요.')
+        flash(f'[{type}] {name} 등록 완료')
     return redirect(url_for('index'))
 
 @app.route('/delete/<int:pk>')
@@ -132,26 +133,24 @@ def delete_webhook(pk):
     if wh:
         db.session.delete(wh)
         db.session.commit()
-        flash('웹훅이 삭제되었습니다.')
+        flash('삭제 완료')
     return redirect(url_for('index'))
 
 @app.route('/test-send')
 def test_send():
     send_to_all_webhooks()
-    flash('테스트 전송이 완료되었습니다.')
+    flash('DB에 등록된 모든 웹훅으로 테스트 전송을 보냈습니다.')
     return redirect(url_for('index'))
 
 # --- [스케줄러 쓰레드] ---
 def run_scheduler():
     schedule.every().day.at(SCHEDULE_TIME).do(send_to_all_webhooks)
-    print(f"[{datetime.now()}] 스케줄러 가동 중... (매일 {SCHEDULE_TIME} 예약)")
     while True:
         schedule.run_pending()
         time.sleep(60)
 
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == '--now':
-        print("즉시 전송 모드를 시작합니다...")
         send_to_all_webhooks()
         sys.exit(0)
     
@@ -159,5 +158,5 @@ if __name__ == '__main__':
     t.daemon = True
     t.start()
     
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
