@@ -16,11 +16,15 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your-super-secret-key-123")
 
-# --- [DB 설정] ---
+# --- [DB 설정 및 환경 변수 체크] ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 DATABASE_KEY = os.getenv("DATABASE_KEY")
+# 테스트용 환경 변수 웹훅
+RAW_WEBHOOK_URLS = os.getenv("WEBHOOK_URLS", "")
+ENV_WEBHOOKS = [url.strip() for url in RAW_WEBHOOK_URLS.split(",") if url.strip()]
 
-print("--- [시스템 시작: DB 연결 확인] ---")
+print("--- [환경 변수 로드 확인] ---")
+print(f"인식된 변수 목록: {list(os.environ.keys())}") # 어떤 변수들이 들어왔는지 확인
 
 if DATABASE_URL:
     if DATABASE_KEY:
@@ -30,10 +34,9 @@ if DATABASE_URL:
     if DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     
-    print(f"Supabase PostgreSQL에 연결을 시도합니다... (Host: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else 'Hidden'})")
+    print(f"Supabase 연결 시도 중...")
 else:
-    print("!!! 경고: DATABASE_URL 환경 변수가 감지되지 않았습니다 !!!")
-    print("로컬 SQLite DB(webhooks.db)를 사용합니다. 데이터가 Supabase에 저장되지 않습니다.")
+    print("경고: DATABASE_URL 환경 변수가 없습니다. 로컬 SQLite를 사용합니다.")
     DATABASE_URL = "sqlite:///webhooks.db"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
@@ -45,16 +48,11 @@ class Webhook(db.Model):
     pk = db.Column(db.Integer, primary_key=True, autoincrement=True)
     name = db.Column(db.String(100), nullable=False)
     key = db.Column(db.String(500), nullable=False)
-    type = db.Column(db.String(20), nullable=False) # CHAT or CHANNEL
+    type = db.Column(db.String(20), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.now)
 
-# 테이블 강제 생성 및 확인
 with app.app_context():
-    try:
-        db.create_all()
-        print("데이터베이스 테이블 확인/생성 완료.")
-    except Exception as e:
-        print(f"데이터베이스 테이블 생성 중 오류 발생: {e}")
+    db.create_all()
 
 # --- [식단 관련 로직] ---
 OPER_CD = os.getenv("OPER_CD", "O000002")
@@ -62,7 +60,7 @@ ASSIGN_CD = os.getenv("ASSIGN_CD", "S000545")
 SCHEDULE_TIME = os.getenv("SCHEDULE_TIME", "07:50")
 
 def fetch_menu_data():
-    url = "https://puls2.pulmuone.com/src/sql/menu/week_sql.php"
+    url = os.getenv("MENU_WEB_URL", "https://puls2.pulmuone.com/src/sql/menu/week_sql.php")
     request_param = {"topOperCd": OPER_CD, "topAssignCd": ASSIGN_CD, "menuDay": 0}
     payload = {"requestId": "search_week", "requestMode": "1", "requestParam": json.dumps(request_param)}
     headers = {
@@ -73,7 +71,8 @@ def fetch_menu_data():
     try:
         response = requests.post(url, data=payload, headers=headers)
         return response.json()
-    except:
+    except Exception as e:
+        print(f"데이터 조회 에러: {e}")
         return None
 
 def format_menu_list(main_dish, side_dishes):
@@ -82,7 +81,7 @@ def format_menu_list(main_dish, side_dishes):
     return f"{main_dish}\n" + "\n".join(side_list)
 
 def parse_menu(raw_data):
-    if not raw_data or "data" not in raw_data: return "정보 없음"
+    if not raw_data or "data" not in raw_data: return "오늘의 식단 정보를 가져올 수 없습니다."
     today_str = datetime.now().strftime("%Y-%m-%d")
     results = {"lunch_salad": "정보 없음", "lunch_main": "정보 없음", "dinner": "정보 없음"}
     for item in raw_data["data"]:
@@ -98,28 +97,38 @@ def parse_menu(raw_data):
     return msg
 
 def send_to_all_webhooks():
+    """DB 웹훅 + ENV 웹훅 모두에게 발송"""
     with app.app_context():
-        webhooks = Webhook.query.all()
-        if not webhooks:
-            print(f"[{datetime.now()}] 전송할 웹훅이 DB에 없습니다.")
+        # 1. DB에서 가져오기
+        db_webhooks = Webhook.query.all()
+        target_urls = [(wh.key, f"[DB:{wh.type}] {wh.name}") for wh in db_webhooks]
+        
+        # 2. Env에서 가져오기 (테스트용)
+        for i, url in enumerate(ENV_WEBHOOKS):
+            target_urls.append((url, f"[ENV] 테스트웹훅_{i+1}"))
+            
+        if not target_urls:
+            print("발송할 대상(DB/ENV)이 전혀 없습니다.")
             return
         
+        print(f"총 {len(target_urls)}개의 대상으로 발송을 시작합니다...")
         raw = fetch_menu_data()
-        if not raw: return
+        if not raw:
+            print("식단 데이터를 가져오지 못했습니다.")
+            return
         
         message = parse_menu(raw)
-        for wh in webhooks:
+        for url, label in target_urls:
             try:
-                requests.post(wh.key, json={"text": message})
-                print(f"[{datetime.now()}] 전송 성공: [{wh.type}] {wh.name}")
+                res = requests.post(url, json={"text": message})
+                print(f"전송 성공: {label} (결과: {res.status_code})")
             except Exception as e:
-                print(f"[{datetime.now()}] 전송 실패 {wh.name}: {e}")
+                print(f"전송 실패 {label}: {e}")
 
 # --- [웹 라우트] ---
 @app.route('/')
 def index():
     webhooks = Webhook.query.order_by(Webhook.created_at.desc()).all()
-    # 현재 어떤 DB를 사용하는지 사용자에게 힌트 제공 (디버깅용)
     db_type = "Supabase(Postgres)" if "postgresql" in DATABASE_URL else "Local(SQLite)"
     return render_template('index.html', webhooks=webhooks, db_type=db_type)
 
@@ -147,13 +156,13 @@ def delete_webhook(pk):
 @app.route('/test-send')
 def test_send():
     send_to_all_webhooks()
-    flash('테스트 전송 완료 (로그 확인)')
+    flash('테스트 발송을 시도했습니다. Render 로그를 확인하세요.')
     return redirect(url_for('index'))
 
 # --- [스케줄러 쓰레드] ---
 def run_scheduler():
     schedule.every().day.at(SCHEDULE_TIME).do(send_to_all_webhooks)
-    print(f"[{datetime.now()}] 스케줄러 가동 중... (매일 {SCHEDULE_TIME} 예약)")
+    print(f"[{datetime.now()}] 스케줄러 가동 중 (예약: {SCHEDULE_TIME})")
     while True:
         schedule.run_pending()
         time.sleep(60)
