@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.env
+webhooks.db
+mysql_data/
+.idea/
+.vscode/
+*.log
