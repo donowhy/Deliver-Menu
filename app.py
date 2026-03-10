@@ -17,21 +17,23 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your-super-secret-key-123")
 
 # --- [DB 설정] ---
-# Render 설정에서 DATABASE_URL과 DATABASE_KEY(비밀번호)를 가져옵니다.
 DATABASE_URL = os.getenv("DATABASE_URL")
 DATABASE_KEY = os.getenv("DATABASE_KEY")
 
+print("--- [시스템 시작: DB 연결 확인] ---")
+
 if DATABASE_URL:
-    # 1. 비밀번호 치환 (URL 안에 [PASSWORD] 또는 PASSWORD 라는 문자열이 있다면 DATABASE_KEY로 교체)
     if DATABASE_KEY:
         DATABASE_URL = DATABASE_URL.replace("PASSWORD", DATABASE_KEY).replace("[PASSWORD]", DATABASE_KEY)
+        print("DATABASE_KEY를 사용하여 URL 비밀번호를 치환했습니다.")
     
-    # 2. SQLAlchemy 1.4+ 호환성을 위해 postgres://를 postgresql://로 변환
     if DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    
+    print(f"Supabase PostgreSQL에 연결을 시도합니다... (Host: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else 'Hidden'})")
 else:
-    # DATABASE_URL이 아예 없을 경우 로컬 DB 사용
-    print("경고: DATABASE_URL 환경 변수가 없습니다. 로컬 SQLite를 사용합니다.")
+    print("!!! 경고: DATABASE_URL 환경 변수가 감지되지 않았습니다 !!!")
+    print("로컬 SQLite DB(webhooks.db)를 사용합니다. 데이터가 Supabase에 저장되지 않습니다.")
     DATABASE_URL = "sqlite:///webhooks.db"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
@@ -46,8 +48,13 @@ class Webhook(db.Model):
     type = db.Column(db.String(20), nullable=False) # CHAT or CHANNEL
     created_at = db.Column(db.DateTime, default=datetime.now)
 
+# 테이블 강제 생성 및 확인
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+        print("데이터베이스 테이블 확인/생성 완료.")
+    except Exception as e:
+        print(f"데이터베이스 테이블 생성 중 오류 발생: {e}")
 
 # --- [식단 관련 로직] ---
 OPER_CD = os.getenv("OPER_CD", "O000002")
@@ -91,11 +98,10 @@ def parse_menu(raw_data):
     return msg
 
 def send_to_all_webhooks():
-    """DB에 등록된 모든 웹훅으로 전송"""
     with app.app_context():
         webhooks = Webhook.query.all()
         if not webhooks:
-            print("전송할 웹훅이 DB에 없습니다.")
+            print(f"[{datetime.now()}] 전송할 웹훅이 DB에 없습니다.")
             return
         
         raw = fetch_menu_data()
@@ -105,15 +111,17 @@ def send_to_all_webhooks():
         for wh in webhooks:
             try:
                 requests.post(wh.key, json={"text": message})
-                print(f"전송 성공: [{wh.type}] {wh.name}")
+                print(f"[{datetime.now()}] 전송 성공: [{wh.type}] {wh.name}")
             except Exception as e:
-                print(f"전송 실패 {wh.name}: {e}")
+                print(f"[{datetime.now()}] 전송 실패 {wh.name}: {e}")
 
 # --- [웹 라우트] ---
 @app.route('/')
 def index():
     webhooks = Webhook.query.order_by(Webhook.created_at.desc()).all()
-    return render_template('index.html', webhooks=webhooks)
+    # 현재 어떤 DB를 사용하는지 사용자에게 힌트 제공 (디버깅용)
+    db_type = "Supabase(Postgres)" if "postgresql" in DATABASE_URL else "Local(SQLite)"
+    return render_template('index.html', webhooks=webhooks, db_type=db_type)
 
 @app.route('/add', methods=['POST'])
 def add_webhook():
@@ -139,12 +147,13 @@ def delete_webhook(pk):
 @app.route('/test-send')
 def test_send():
     send_to_all_webhooks()
-    flash('DB에 등록된 모든 웹훅으로 테스트 전송을 보냈습니다.')
+    flash('테스트 전송 완료 (로그 확인)')
     return redirect(url_for('index'))
 
 # --- [스케줄러 쓰레드] ---
 def run_scheduler():
     schedule.every().day.at(SCHEDULE_TIME).do(send_to_all_webhooks)
+    print(f"[{datetime.now()}] 스케줄러 가동 중... (매일 {SCHEDULE_TIME} 예약)")
     while True:
         schedule.run_pending()
         time.sleep(60)
