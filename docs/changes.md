@@ -12,10 +12,19 @@
 
 - `templates/index.html`
   - 화면 하단의 자동 발송 시간을 Flask `config` 대신 실제 전달된 `schedule_time` 값으로 표시하도록 수정했습니다.
+  - 상단 관리 영역에 로그아웃 버튼을 추가했습니다.
+
+- `templates/login.html`
+  - 관리자 로그인 화면을 추가했습니다.
 
 - `docker-compose.yml`
   - MySQL 컨테이너 시작 시 초기 스키마를 자동 생성하도록 `./docker/mysql/init` 볼륨을 추가했습니다.
   - `web`, `scheduler` 컨테이너에 `MYSQL_HOST=db` 환경변수를 추가해 둘 다 동일한 MySQL 컨테이너를 바라보도록 정리했습니다.
+
+- `app.py`
+  - 세션 기반 로그인 보호를 추가했습니다.
+  - `/login`, `/logout` 라우트를 추가했고, 메인 화면과 등록/삭제/테스트 발송 라우트는 로그인 후에만 접근 가능하게 변경했습니다.
+  - 관리자 계정은 `ADMIN_USERNAME`, `ADMIN_PASSWORD` 환경변수로 받도록 했고, `ADMIN_PASSWORD`가 없으면 `APP_PASSWORD`, 그것도 없으면 `SECRET_KEY`를 사용하도록 했습니다.
 
 - `docker/mysql/init/01_create_tb_webhook_config.sql`
   - 아래 스키마가 MySQL 초기화 시 자동 실행되도록 추가했습니다.

@@ -4,7 +4,8 @@ import time
 import threading
 import logging
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash
+from functools import wraps
+from flask import Flask, render_template, request, redirect, url_for, flash, session
 from flask_sqlalchemy import SQLAlchemy
 from dotenv import load_dotenv
 import schedule
@@ -17,7 +18,11 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your-super-secret-key-123")
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 logger = logging.getLogger(__name__)
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD") or os.getenv("APP_PASSWORD") or app.secret_key
 
 # --- [DB 설정] ---
 def build_database_url():
@@ -67,6 +72,18 @@ except Exception as e:
 # --- [발송 작업] ---
 SCHEDULE_TIME = os.getenv("SCHEDULE_TIME", "07:50")
 
+def is_logged_in():
+    return session.get("authenticated") is True
+
+def login_required(view_func):
+    @wraps(view_func)
+    def wrapped_view(*args, **kwargs):
+        if not is_logged_in():
+            flash("로그인 후 이용해주세요.")
+            return redirect(url_for("login", next=request.path))
+        return view_func(*args, **kwargs)
+    return wrapped_view
+
 def send_to_all_webhooks():
     """DB 웹훅 + ENV 웹훅 모두에게 발송"""
     target_urls = []
@@ -100,7 +117,35 @@ def send_to_all_webhooks():
         print(f"[{datetime.now()}] {label} 발송 결과: {status}")
 
 # --- [웹 라우트] ---
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if is_logged_in():
+        return redirect(url_for('index'))
+
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            session.clear()
+            session['authenticated'] = True
+            session['admin_username'] = ADMIN_USERNAME
+            flash('로그인되었습니다.')
+            next_url = request.args.get('next') or url_for('index')
+            return redirect(next_url)
+
+        flash('아이디 또는 비밀번호가 올바르지 않습니다.')
+
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash('로그아웃되었습니다.')
+    return redirect(url_for('login'))
+
 @app.route('/')
+@login_required
 def index():
     try:
         webhooks = Webhook.query.order_by(Webhook.id.desc()).all()
@@ -112,6 +157,7 @@ def index():
     return render_template('index.html', webhooks=webhooks, db_type=db_type, schedule_time=SCHEDULE_TIME)
 
 @app.route('/add', methods=['POST'])
+@login_required
 def add_webhook():
     name = request.form.get('name')
     webhook_url = request.form.get('webhook_url')
@@ -132,6 +178,7 @@ def add_webhook():
     return redirect(url_for('index'))
 
 @app.route('/delete/<int:id>')
+@login_required
 def delete_webhook(id):
     try:
         wh = Webhook.query.get(id)
@@ -146,6 +193,7 @@ def delete_webhook(id):
     return redirect(url_for('index'))
 
 @app.route('/test-send')
+@login_required
 def test_send():
     send_to_all_webhooks()
     flash('테스트 발송 요청 완료')
