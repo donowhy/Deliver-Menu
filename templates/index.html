@@ -14,76 +14,71 @@
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="card p-4 mb-4">
-            <h2 class="text-center mb-4">🍱 식단 알림 웹훅 관리</h2>
-            
-            {% with messages = get_flashed_messages() %}
-              {% if messages %}
-                {% for message in messages %}
-                  <div class="alert alert-info">{{ message }}</div>
-                {% endfor %}
-              {% endif %}
-            {% endwith %}
+<div class="container">
+    <div class="card p-4 mb-4">
+        <h2 class="text-center mb-4">🍱 식단 알림 웹훅 관리</h2>
 
-            <form action="/add" method="POST" class="row g-3">
-                <div class="col-md-3">
-                    <select name="type" class="form-select" required>
-                        <option value="" disabled selected>타입 선택</option>
-                        <option value="CHAT">CHAT (개인/그룹채팅)</option>
-                        <option value="CHANNEL">CHANNEL (채널)</option>
-                    </select>
-                </div>
-                <div class="col-md-3">
-                    <input type="text" name="name" class="form-control" placeholder="방 이름 (예: 개발팀)" required>
-                </div>
-                <div class="col-md-4">
-                    <input type="url" name="key" class="form-control" placeholder="Teams 웹훅 URL (key)" required>
-                </div>
-                <div class="col-md-2">
-                    <button type="submit" class="btn btn-primary w-100">등록</button>
-                </div>
-            </form>
-        </div>
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+        {% for message in messages %}
+        <div class="alert alert-info">{{ message }}</div>
+        {% endfor %}
+        {% endif %}
+        {% endwith %}
 
-        <div class="card p-4">
-            <div class="d-flex justify-content-between align-items-center mb-3">
-                <h4>등록된 웹훅 리스트</h4>
-                <a href="/test-send" class="btn btn-outline-success btn-sm">지금 즉시 모두에게 전송 테스트</a>
+        <form action="/add" method="POST" class="row g-3">
+            <div class="col-md-4">
+                <input type="text" name="name" class="form-control" placeholder="이름" required>
             </div>
-            <table class="table table-hover">
-                <thead class="table-light">
-                    <tr>
-                        <th>타입</th>
-                        <th>이름</th>
-                        <th>URL (Key)</th>
-                        <th>관리</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for wh in webhooks %}
-                    <tr>
-                        <td>
-                            <span class="badge {{ 'badge-chat' if wh.type == 'CHAT' else 'badge-channel' }}">
-                                {{ wh.type }}
-                            </span>
-                        </td>
-                        <td>{{ wh.name }}</td>
-                        <td class="text-truncate" style="max-width: 300px;">{{ wh.key }}</td>
-                        <td>
-                            <a href="/delete/{{ wh.pk }}" class="btn btn-danger btn-sm" onclick="return confirm('삭제하시겠습니까?')">삭제</a>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                    {% if not webhooks %}
-                    <tr>
-                        <td colspan="4" class="text-center text-muted py-4">등록된 웹훅이 없습니다.</td>
-                    </tr>
-                    {% endif %}
-                </tbody>
-            </table>
-        </div>
-        <p class="text-center mt-3 text-muted small">매일 {{ config.get('SCHEDULE_TIME', '07:50') }}에 자동 발송됩니다.</p>
+
+            <div class="col-md-6">
+                <input type="url" name="webhook_url" class="form-control" placeholder="Webhook URL" required>
+            </div>
+
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary w-100">등록</button>
+            </div>
+        </form>
     </div>
+
+    <div class="card p-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h4>등록된 웹훅 리스트</h4>
+            <a href="/test-send" class="btn btn-outline-success btn-sm">지금 즉시 모두에게 전송 테스트</a>
+        </div>
+        <table class="table table-hover">
+            <thead class="table-light">
+            <tr>
+                <th>ID</th>
+                <th>이름</th>
+                <th>활성여부</th>
+                <th>Webhook URL</th>
+                <th>관리</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for wh in webhooks %}
+            <tr>
+                <td>{{ wh.id }}</td>
+                <td>{{ wh.name }}</td>
+                <td>{{ wh.active_yn }}</td>
+                <td class="text-truncate" style="max-width: 300px;">{{ wh.webhook_url }}</td>
+                <td>
+                    <a href="/delete/{{ wh.id }}" class="btn btn-danger btn-sm"
+                       onclick="return confirm('삭제하시겠습니까?')">삭제</a>
+                </td>
+            </tr>
+            {% endfor %}
+
+            {% if not webhooks %}
+            <tr>
+                <td colspan="5" class="text-center text-muted py-4">등록된 웹훅이 없습니다.</td>
+            </tr>
+            {% endif %}
+            </tbody>
+        </table>
+    </div>
+    <p class="text-center mt-3 text-muted small">매일 {{ schedule_time }}에 자동 발송됩니다.</p>
+</div>
 </body>
 </html>

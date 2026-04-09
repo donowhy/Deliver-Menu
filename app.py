@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import threading
+import logging
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
@@ -16,18 +17,32 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your-super-secret-key-123")
+logger = logging.getLogger(__name__)
 
 # --- [DB 설정] ---
-DATABASE_URL = os.getenv("DATABASE_URL")
-DATABASE_KEY = os.getenv("DATABASE_KEY") or os.getenv("KEY")
+def build_database_url():
+    database_url = os.getenv("DATABASE_URL")
+    database_key = os.getenv("DATABASE_KEY") or os.getenv("KEY")
 
-if DATABASE_URL:
-    if DATABASE_KEY:
-        DATABASE_URL = DATABASE_URL.replace("PASSWORD", DATABASE_KEY).replace("[PASSWORD]", DATABASE_KEY)
-    if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-else:
-    DATABASE_URL = "sqlite:///webhooks.db"
+    if database_url:
+        if database_key:
+            database_url = database_url.replace("PASSWORD", database_key).replace("[PASSWORD]", database_key)
+        if database_url.startswith("postgres://"):
+            database_url = database_url.replace("postgres://", "postgresql://", 1)
+        return database_url
+
+    mysql_password = os.getenv("MYSQL_PASSWORD") or os.getenv("MYSQL_ROOT_PASSWORD")
+    mysql_user = os.getenv("MYSQL_USER", "root")
+    mysql_host = os.getenv("MYSQL_HOST", "db")
+    mysql_port = os.getenv("MYSQL_PORT", "3306")
+    mysql_database = os.getenv("MYSQL_DATABASE", "menu_deliver")
+
+    if mysql_password:
+        return f"mysql+pymysql://{mysql_user}:{mysql_password}@{mysql_host}:{mysql_port}/{mysql_database}?charset=utf8mb4"
+
+    return "sqlite:///webhooks.db"
+
+DATABASE_URL = build_database_url()
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -35,18 +50,19 @@ db = SQLAlchemy(app)
 
 # --- [모델 정의] ---
 class Webhook(db.Model):
-    pk = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    __tablename__ = "TB_WEBHOOK_CONFIG"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    webhook_url = db.Column(db.String(2000), nullable=False)
+    active_yn = db.Column(db.Integer, nullable=False, default=1)
     name = db.Column(db.String(100), nullable=False)
-    key = db.Column(db.String(500), nullable=False)
-    type = db.Column(db.String(20), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.now)
 
 # DB 초기화
 try:
     with app.app_context():
         db.create_all()
 except Exception as e:
-    print(f"!!! DB 연결 실패: {e}")
+    logger.exception("DB 연결 또는 초기화 실패: %s", e)
 
 # --- [발송 작업] ---
 SCHEDULE_TIME = os.getenv("SCHEDULE_TIME", "07:50")
@@ -58,11 +74,11 @@ def send_to_all_webhooks():
     # 1. DB에서 웹훅 가져오기
     try:
         with app.app_context():
-            db_webhooks = Webhook.query.all()
+            db_webhooks = Webhook.query.filter_by(active_yn=1).all()
             for wh in db_webhooks:
-                target_urls.append((wh.key, f"[DB:{wh.type}] {wh.name}"))
-    except:
-        pass
+                target_urls.append((wh.webhook_url, f"[DB] {wh.name}"))
+    except Exception as e:
+        logger.exception("DB 웹훅 조회 실패: %s", e)
 
     # 2. ENV에서 웹훅 가져오기 (테스트용)
     raw_urls = os.getenv("WEBHOOK_URLS", "")
@@ -87,34 +103,46 @@ def send_to_all_webhooks():
 @app.route('/')
 def index():
     try:
-        webhooks = Webhook.query.order_by(Webhook.created_at.desc()).all()
-    except:
+        webhooks = Webhook.query.order_by(Webhook.id.desc()).all()
+    except Exception as e:
+        logger.exception("웹훅 목록 조회 실패: %s", e)
         webhooks = []
-    db_type = "Supabase(Postgres)" if "postgresql" in DATABASE_URL else "Local(SQLite)"
-    return render_template('index.html', webhooks=webhooks, db_type=db_type)
+
+    db_type = "MySQL"
+    return render_template('index.html', webhooks=webhooks, db_type=db_type, schedule_time=SCHEDULE_TIME)
 
 @app.route('/add', methods=['POST'])
 def add_webhook():
-    name, key, wh_type = request.form.get('name'), request.form.get('key'), request.form.get('type')
-    if name and key and wh_type:
+    name = request.form.get('name')
+    webhook_url = request.form.get('webhook_url')
+
+    if name and webhook_url:
         try:
-            db.session.add(Webhook(name=name, key=key, type=wh_type))
+            db.session.add(Webhook(
+                name=name,
+                webhook_url=webhook_url,
+                active_yn=1
+            ))
             db.session.commit()
-            flash(f'[{wh_type}] {name} 등록 완료')
+            flash(f'{name} 등록 완료')
         except Exception as e:
+            db.session.rollback()
             flash(f'DB 저장 실패: {e}')
+
     return redirect(url_for('index'))
 
-@app.route('/delete/<int:pk>')
-def delete_webhook(pk):
+@app.route('/delete/<int:id>')
+def delete_webhook(id):
     try:
-        wh = Webhook.query.get(pk)
+        wh = Webhook.query.get(id)
         if wh:
             db.session.delete(wh)
             db.session.commit()
             flash('삭제 완료')
     except Exception as e:
+        db.session.rollback()
         flash(f'삭제 실패: {e}')
+
     return redirect(url_for('index'))
 
 @app.route('/test-send')
