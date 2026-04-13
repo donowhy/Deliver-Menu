@@ -5,6 +5,7 @@ import threading
 import logging
 from datetime import datetime
 from functools import wraps
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from flask import Flask, render_template, request, redirect, url_for, flash, session
 from flask_sqlalchemy import SQLAlchemy
 from dotenv import load_dotenv
@@ -25,6 +26,18 @@ ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD") or os.getenv("APP_PASSWORD") or app.secret_key
 
 # --- [DB 설정] ---
+def normalize_database_url(database_url):
+    if database_url.startswith("jdbc:"):
+        database_url = database_url.removeprefix("jdbc:")
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
+    if database_url.startswith("postgresql://") and "sslmode=" not in database_url:
+        parts = urlsplit(database_url)
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query["sslmode"] = "require"
+        database_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    return database_url
+
 def build_database_url():
     database_url = os.getenv("DATABASE_URL")
     database_key = os.getenv("DATABASE_KEY") or os.getenv("KEY")
@@ -32,9 +45,7 @@ def build_database_url():
     if database_url:
         if database_key:
             database_url = database_url.replace("PASSWORD", database_key).replace("[PASSWORD]", database_key)
-        if database_url.startswith("postgres://"):
-            database_url = database_url.replace("postgres://", "postgresql://", 1)
-        return database_url
+        return normalize_database_url(database_url)
 
     mysql_password = os.getenv("MYSQL_PASSWORD") or os.getenv("MYSQL_ROOT_PASSWORD")
     mysql_user = os.getenv("MYSQL_USER", "root")
