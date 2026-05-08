@@ -9,6 +9,9 @@ env/
 webhooks.json
 webhooks.db
 mysql_data/
+build/
+dist/
+delivery-menu.spec
 .idea/
 .vscode/
 *.log
