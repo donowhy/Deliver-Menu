@@ -6,6 +6,7 @@ venv/
 ENV/
 env/
 .env
+webhooks.json
 webhooks.db
 mysql_data/
 .idea/
