@@ -52,7 +52,16 @@ def fetch_menu_data(menu_day=0):
 
 
 def split_side_dishes(side_dishes):
-    return [item.strip() for item in (side_dishes or "").split(",") if item.strip()]
+    return [item.strip() for item in (side_dishes or "").split(",") if item and item.strip()]
+
+
+def merge_menu_items(main_dish, side_dishes):
+    main_item = (main_dish or "").strip() or "정보 없음"
+    items = [main_item]
+    for side in split_side_dishes(side_dishes):
+        if side != main_item:
+            items.append(side)
+    return items
 
 
 def summarize_day_menu(raw_data):
@@ -61,7 +70,7 @@ def summarize_day_menu(raw_data):
         return summary
 
     for item in raw_data["data"]:
-        meal_type, main_dish = item[1], item[3]
+        meal_type, main_dish = item[1], (item[3] or "").strip()
         if "중식 일반메뉴" in meal_type:
             summary["lunch"] = main_dish or "정보 없음"
         elif "석식 일반메뉴" in meal_type:
@@ -112,13 +121,16 @@ def parse_menu(raw_data):
         return menu
 
     for item in raw_data["data"]:
-        meal_type, main_dish, side_dishes = item[1], item[3], item[5]
+        meal_type = item[1]
+        main_dish = (item[3] or "").strip()
+        side_dishes = item[5]
+
         if "중식 샐러드팩" in meal_type:
             menu["lunch_salad"] = main_dish or "정보 없음"
         elif "중식 일반메뉴" in meal_type:
-            menu["lunch_main"] = [main_dish or "정보 없음", *split_side_dishes(side_dishes)]
+            menu["lunch_main"] = merge_menu_items(main_dish, side_dishes)
         elif "석식 일반메뉴" in meal_type:
-            menu["dinner"] = [main_dish or "정보 없음", *split_side_dishes(side_dishes)]
+            menu["dinner"] = merge_menu_items(main_dish, side_dishes)
 
     if menu["is_monday"]:
         menu["weekly_summary"] = build_weekly_summary(raw_data)
@@ -127,7 +139,7 @@ def parse_menu(raw_data):
 
 
 def format_bullets(items):
-    normalized = [item for item in items if item] or ["정보 없음"]
+    normalized = [item.strip() for item in items if item and item.strip()] or ["정보 없음"]
     return "\n".join(f"• {item}" for item in normalized)
 
 
@@ -203,14 +215,14 @@ def build_weekly_summary_block(menu):
                                         "wrap": True,
                                     }
                                 ],
-                            }
+                            },
                         ],
                     },
                     {
                         "type": "FactSet",
                         "facts": [
-                            {"title": "🍽 점심", "value": day["lunch"]},
-                            {"title": "🌙 저녁", "value": day["dinner"]},
+                            {"title": "중식", "value": day["lunch"]},
+                            {"title": "석식", "value": day["dinner"]},
                         ],
                     },
                 ],
